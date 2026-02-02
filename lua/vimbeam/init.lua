@@ -482,6 +482,77 @@ function M.connect()
     M.set_color(M.config.user_color)
   end
 end
+-- NEW: Storm connect
+function M.connect_storm()
+  if M.state.connected then
+    vim.notify('[vimbeam] Already connected', vim.log.levels.WARN)
+    return
+  end
+
+  if not M.config.storm_url then
+    vim.notify('[vimbeam] storm_url not configured', vim.log.levels.ERROR)
+    return
+  end
+
+  local helper_path = M.config.node_helper_path
+  if not helper_path or vim.fn.filereadable(helper_path) == 0 then
+    vim.notify('[vimbeam] Node helper not found at: ' .. (helper_path or 'nil'), vim.log.levels.ERROR)
+    return
+  end
+
+  -- Start helper process (same as Automerge)
+  M.state.job_id = vim.fn.jobstart({ 'node', helper_path }, {
+    on_stdout = function(_, data, _)
+      M.on_stdout(data)
+    end,
+    on_stderr = function(_, data, _)
+      for _, line in ipairs(data) do
+        if line ~= '' then
+          if M.config.debug then
+            vim.notify('[vimbeam] Helper: ' .. line, vim.log.levels.DEBUG)
+          end
+        end
+      end
+    end,
+    on_exit = function(_, code, _)
+      M.on_exit(code)
+    end,
+    stdout_buffered = false,
+    stderr_buffered = false,
+  })
+
+  if M.state.job_id <= 0 then
+    vim.notify('[vimbeam] Failed to start helper', vim.log.levels.ERROR)
+    M.state.job_id = nil
+    return
+  end
+
+  M.state.mode = 'storm'
+
+  -- Auto-detect user identity if not set
+  if not M.config.user_name then
+    local git_name = vim.fn.system('git config user.name 2>/dev/null'):gsub('%s+$', '')
+    if git_name ~= '' then
+      M.config.user_name = git_name
+    else
+      M.config.user_name = vim.env.USER or 'vim-user'
+    end
+  end
+
+  if not M.config.user_color then
+    math.randomseed(os.time())
+    local idx = math.random(1, #M.color_palette)
+    M.config.user_color = M.color_palette[idx].hex
+  end
+
+  -- Send Storm connect message
+  M.send({
+    type = 'storm_connect',
+    stormUrl = M.config.storm_url,
+    name = M.config.user_name,
+    color = M.config.user_color,
+  })
+end
 
 -- Disconnect from server
 function M.disconnect()
