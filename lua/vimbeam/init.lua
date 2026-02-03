@@ -289,9 +289,9 @@ function M.setup_commands()
   end, { nargs = 1, desc = 'TESTING: Connect and open doc in one step' })
 
     -- NEW: Storm-specific commands
-  vim.api.nvim_create_user_command('StormConnect', function()
-    M.connect_storm()
-  end, { desc = 'Connect to Storm server' })
+  vim.api.nvim_create_user_command('StormConnect', function(opts)
+    M.connect_storm(opts.args)
+  end, { nargs = 1, desc = 'Connect to Storm server with project ID' })
 
   vim.api.nvim_create_user_command('StormProject', function(opts)
     if opts.args == '' then
@@ -483,7 +483,12 @@ function M.connect()
   end
 end
 -- NEW: Storm connect
-function M.connect_storm()
+function M.connect_storm(project_id)
+  if not project_id or project_id == '' then
+    vim.notify('[vimbeam] Project ID required', vim.log.levels.ERROR)
+    return
+  end
+
   if M.state.connected then
     vim.notify('[vimbeam] Already connected', vim.log.levels.WARN)
     return
@@ -528,6 +533,7 @@ function M.connect_storm()
   end
 
   M.state.mode = 'storm'
+  M.state.project_id = project_id
 
   -- Auto-detect user identity if not set
   if not M.config.user_name then
@@ -549,6 +555,8 @@ function M.connect_storm()
   M.send({
     type = 'storm_connect',
     stormUrl = M.config.storm_url,
+    name = M.config.user_name,
+    projectId = project_id,
     name = M.config.user_name,
     color = M.config.user_color,
   })

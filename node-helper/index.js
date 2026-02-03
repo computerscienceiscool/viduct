@@ -166,15 +166,15 @@ function connectAwareness(url) {
 }
 
 /**
- * Connect to Storm WebSocket server
+ * Connect to Storm WebSocket server for a specific project
  */
-function connectStorm(url, name, color) {
+function connectStorm(url, projectId, name, color) {
   if (stormWs) {
     log('Storm already connected');
     return;
   }
 
-  const wsUrl = url.replace(/^http/, 'ws') + '/ws';
+  const wsUrl = url.replace(/^http/, 'ws') + '/project/' + projectId + '/ws';
   log(`Connecting to Storm: ${wsUrl}`);
 
   stormWs = new WebSocket(wsUrl);
@@ -195,8 +195,8 @@ function connectStorm(url, name, color) {
         stormWs.send(JSON.stringify({ type: 'ping' }));
       }
     }, 30000);
+    send({ type: 'storm_connected', projectId: projectId });
 
-    send({ type: 'storm_connected' });
   });
 
   stormWs.on('message', (data) => {
@@ -240,7 +240,6 @@ function connectStorm(url, name, color) {
     send({ type: 'storm_disconnected' });
   });
 }
-
 
 
 /**
@@ -505,7 +504,11 @@ async function handleMessage(msg) {
         stormMode = 'storm';
         if (msg.name) userName = msg.name;
         if (msg.color) userColor = msg.color;
-        connectStorm(msg.stormUrl, userName, userColor);
+                if (!msg.projectId) {
+          send({ type: 'error', message: 'No projectId provided' });
+          break;
+        }
+        connectStorm(msg.stormUrl, msg.projectId, userName, userColor);
         break;
       }
       case 'storm_disconnect': {
