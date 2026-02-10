@@ -18,16 +18,14 @@ import * as readline from 'readline';
 import * as path from 'path';
 import * as os from 'os';
 import * as fs from 'fs';
-import WebSocket from 'ws';
+import { AwarenessClientNode } from '@collab-editor/awareness/node';
 
 // State
 let repo = null;
 let handle = null;
-let awarenessWs = null;
-let awarenessHeartbeat = null;
-let awarenessNotified = false;
+let awarenessClient = null;
 let userId = null;
-let userName = 'vimbeam-user';
+let userName = 'viduct-user';
 let userColor = '#88cc88';
 let currentDocId = null;
 let isApplyingRemote = false;
@@ -35,7 +33,7 @@ let currentSelection = { anchor: 0 };
 let changeHandler = null;  // Track change listener for cleanup
 
 // Storage directory for Automerge data
-const storageDir = path.join(os.homedir(), '.local', 'share', 'vimbeam', 'automerge-data');
+const storageDir = path.join(os.homedir(), '.local', 'share', 'viduct', 'automerge-data');
 
 // Ensure storage directory exists
 if (!fs.existsSync(storageDir)) {
@@ -90,74 +88,51 @@ function contentToString(doc) {
  * Generate a simple user ID
  */
 function generateUserId() {
-  return 'beam-' + Math.random().toString(36).substring(2, 10);
+  return 'duct-' + Math.random().toString(36).substring(2, 10);
 }
 
 /**
- * Connect to the awareness WebSocket server
+ * Connect to the awareness server using AwarenessClientNode
  */
 function connectAwareness(url) {
-  if (awarenessWs) {
-    awarenessWs.close();
-  }
-  if (awarenessHeartbeat) {
-    clearInterval(awarenessHeartbeat);
-    awarenessHeartbeat = null;
+  if (awarenessClient) {
+    awarenessClient.destroy();
+    awarenessClient = null;
   }
 
-  awarenessWs = new WebSocket(url);
-  awarenessNotified = false;
+  awarenessClient = new AwarenessClientNode(url, {
+    userId: userId,
+    name: userName,
+    color: userColor,
+    documentId: currentDocId || 'default'
+  });
 
-  awarenessWs.on('open', () => {
+  awarenessClient.on('connected', () => {
     log('Awareness connected');
-    // Send initial presence
-    sendAwareness();
-
-    // Periodically refresh presence so newly joined clients see us
-    awarenessHeartbeat = setInterval(() => {
-      sendAwareness();
-    }, 5000);
   });
 
-  awarenessWs.on('message', (data) => {
-    try {
-      const msg = JSON.parse(data.toString());
-      // Forward cursor updates to Neovim
-      if (msg.type === 'awareness' && msg.clientID !== userId) {
-        const displayName = (msg.state?.user?.name || '').trim() || msg.clientID || 'unknown';
-        send({
-          type: 'cursor',
-          userId: msg.clientID,
-          name: displayName,
-          color: msg.state?.user?.color || '#888888',
-          anchor: msg.state?.selection?.anchor ?? null,
-          head: msg.state?.selection?.head ?? null
-        });
-      }
-    } catch (e) {
-      log(`Awareness parse error: ${e.message}`);
-    }
+  awarenessClient.on('cursor', (data) => {
+    // Forward cursor updates to Neovim
+    const displayName = (data.name || '').trim() || data.userId || 'unknown';
+    send({
+      type: 'cursor',
+      userId: data.userId,
+      name: displayName,
+      color: data.color || '#888888',
+      anchor: data.anchor ?? null,
+      head: data.head ?? null
+    });
   });
 
-  awarenessWs.on('close', () => {
+  awarenessClient.on('disconnected', () => {
     log('Awareness disconnected');
-    if (awarenessHeartbeat) {
-      clearInterval(awarenessHeartbeat);
-      awarenessHeartbeat = null;
-    }
-    if (!awarenessNotified) {
-      send({ type: 'error', message: 'Awareness connection closed' });
-      awarenessNotified = true;
-    }
   });
 
-  awarenessWs.on('error', (err) => {
-    log(`Awareness error: ${err.message}`);
-    if (!awarenessNotified) {
-      send({ type: 'error', message: `Awareness connection failed: ${err.message}` });
-      awarenessNotified = true;
-    }
+  awarenessClient.on('error', (err) => {
+    log(`Awareness error: ${err?.message || err}`);
   });
+
+  awarenessClient.connect();
 }
 
 /**
@@ -168,17 +143,13 @@ let currentCursorOffset = 0;
 function sendAwareness(selection = null) {
   const selectionState = selection || currentSelection || { anchor: currentCursorOffset };
   log('sendAwareness called, selection anchor=' + selectionState.anchor + (selectionState.head !== undefined ? ` head=${selectionState.head}` : ''));
-  if (awarenessWs && awarenessWs.readyState === WebSocket.OPEN) {
-    awarenessWs.send(JSON.stringify({
-      type: "awareness",
-      clientID: userId,
-      state: {
-        user: { name: userName, color: userColor },
-        typing: false,
-        selection: selectionState
-      },
-      documentId: currentDocId
-    }));
+
+  if (awarenessClient) {
+    if (selectionState.head !== undefined) {
+      awarenessClient.updateSelection(selectionState.anchor, selectionState.head);
+    } else {
+      awarenessClient.updateCursor(selectionState.anchor);
+    }
   }
 }
 
@@ -222,13 +193,9 @@ async function handleMessage(msg) {
         if (handle) {
           handle = null;
         }
-        if (awarenessWs) {
-          awarenessWs.close();
-          awarenessWs = null;
-        }
-        if (awarenessHeartbeat) {
-          clearInterval(awarenessHeartbeat);
-          awarenessHeartbeat = null;
+        if (awarenessClient) {
+          awarenessClient.destroy();
+          awarenessClient = null;
         }
         if (repo) {
           repo = null;
@@ -252,9 +219,14 @@ async function handleMessage(msg) {
 
         const docId = handle.documentId;
         currentDocId = docId;
-        
+
         // Setup change listener
         setupChangeListener();
+
+        // Update awareness client's document ID and broadcast
+        if (awarenessClient) {
+          awarenessClient.setDocumentId(docId);
+        }
         sendAwareness();
 
         send({ type: 'created', docId: docId });
@@ -308,10 +280,15 @@ async function handleMessage(msg) {
 
           // Setup change listener
           setupChangeListener();
-          currentDocId = docId;
+          currentDocId = fullDocId;  // Use full ID with automerge: prefix for awareness matching
+
+          // Update awareness client's document ID and broadcast
+          if (awarenessClient) {
+            awarenessClient.setDocumentId(fullDocId);
+          }
           sendAwareness();
 
-          send({ type: 'opened', docId: docId, content: content });
+          send({ type: 'opened', docId: fullDocId, content: content });
           log(`Opened document: ${docId} (${content.length} chars)`);
 
           // Fallback: if initial content was empty, re-check after sync settles
@@ -375,8 +352,10 @@ async function handleMessage(msg) {
       }
 
       case 'set_name': {
-        userName = msg.name || 'vimbeam-user';
-        sendAwareness();
+        userName = msg.name || 'viduct-user';
+        if (awarenessClient) {
+          awarenessClient.setName(userName);
+        }
         send({ type: 'name_set', name: userName });
         log(`Name set to: ${userName}`);
         break;
@@ -384,7 +363,9 @@ async function handleMessage(msg) {
 
       case 'set_color': {
         userColor = msg.color || '#88cc88';
-        sendAwareness();
+        if (awarenessClient) {
+          awarenessClient.setColor(userColor);
+        }
         send({ type: 'color_set', color: userColor });
         log(`Color set to: ${userColor}`);
         break;

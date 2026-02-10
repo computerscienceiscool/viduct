@@ -1,13 +1,14 @@
 {
-  "name": "vimbeam-helper",
+  "name": "viduct-helper",
   "version": "1.0.0",
   "type": "module",
-  "description": "Node.js helper for vimbeam - Neovim collaborative editing via Automerge",
+  "description": "Node.js helper for viduct - Neovim collaborative editing via Automerge",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"
   },
   "dependencies": {
+    "@collab-editor/awareness": "file:../../collab-awareness",
     "@automerge/automerge": "^2.2.8",
     "@automerge/automerge-repo": "^2.5.1",
     "@automerge/automerge-repo-network-websocket": "^2.5.1",
